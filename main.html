@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Đồng hồ Kim trên Canvas & Đồng bộ</title>
+    <!-- Tải Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Tùy chỉnh font Inter & Nền tối */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117; 
+        }
+        
+        /* 1. Wrapper để duy trì tỷ lệ 1:1 (Aspect Ratio Fix) */
+        .aspect-ratio-wrapper {
+            width: 100%;
+            padding-top: 100%; /* Chiều cao bằng 100% chiều rộng */
+            position: relative;
+            max-width: 250px; /* Giới hạn kích thước tối đa cho mỗi đồng hồ */
+            margin: auto; /* Căn giữa wrapper */
+        }
+
+        /* 2. Canvas nằm tuyệt đối bên trong wrapper */
+        .clock-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+            /* Thêm viền nhẹ cho đẹp mắt */
+            border-radius: 50%;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Responsive grid cho 3 đồng hồ */
+        @media (min-width: 640px) {
+            .clocks-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <div class="w-full max-w-5xl bg-gray-800 p-8 rounded-xl shadow-2xl text-white">
+        
+        <h1 class="text-3xl font-extrabold text-center mb-6 text-indigo-400">
+            Đồng hồ Múi giờ Canvas Đồng Bộ 2 Giây
+        </h1>
+
+        <!-- Khu vực Chọn Múi giờ (Combobox) -->
+        <div class="mb-8 p-5 bg-gray-900 rounded-xl border-b-4 border-fuchsia-500">
+            <label for="timezone-selector" class="text-lg font-bold mb-3 text-fuchsia-400 block">
+                Chọn Múi giờ Quốc gia
+            </label>
+            <select id="timezone-selector" 
+                    class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-lg text-white focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out">
+                <!-- Options sẽ được thêm bằng JavaScript -->
+            </select>
+        </div>
+
+        <!-- Trạng thái Đồng bộ API và Ping -->
+        <div class="mb-10 p-5 bg-gray-700 rounded-lg border-b-4 border-yellow-500">
+            <h2 class="text-lg font-bold mb-3 text-yellow-400 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.23"></path><path d="M16 21v-4"></path><path d="M13 17l3 4l3-4"></path></svg>
+                Trạng thái Đồng bộ Giờ & Ping
+            </h2>
+            <div class="text-sm font-semibold text-center text-gray-300 mb-2">
+                <span id="api-status">Đang đồng bộ lần đầu...</span>
+            </div>
+            <div class="text-xs text-center">
+                Ping đến WorldTimeAPI: <span id="latency-display" class="text-gray-300 font-bold">...</span>
+                <p id="last-ping-time" class="text-xs text-center text-gray-400 mt-1">Cập nhật lúc: N/A</p>
+            </div>
+        </div>
+
+        <!-- Vùng Hiển thị 3 Đồng hồ Canvas -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 clocks-grid">
+            
+            <!-- 1. Đồng hồ Múi giờ Đã chọn (Dùng API Time) -->
+            <div class="clock-container bg-gray-700 rounded-lg border-b-4 border-blue-500 p-4">
+                <p class="text-sm font-medium text-blue-400 mb-2 text-center">Giờ Múi giờ Đã chọn</p>
+                <div class="aspect-ratio-wrapper">
+                    <canvas id="clock-selected" class="clock-canvas" width="250" height="250"></canvas>
+                </div>
+                <div id="selected-date" class="text-xs text-gray-300 mt-2 text-center"></div>
+                <div id="selected-digital-time" class="text-xl font-bold text-center text-blue-400 mt-1">--:--:--</div>
+            </div>
+
+            <!-- 2. Đồng hồ Giờ Hệ thống (Local/Windows Time) -->
+            <div class="clock-container bg-gray-700 rounded-lg border-b-4 border-emerald-500 p-4">
+                <p class="text-sm font-medium text-emerald-400 mb-2 text-center">Giờ Hệ Thống</p>
+                <div class="aspect-ratio-wrapper">
+                    <canvas id="clock-local" class="clock-canvas" width="250" height="250"></canvas>
+                </div>
+                <div id="local-date" class="text-xs text-gray-300 mt-2 text-center"></div>
+                <div id="local-digital-time" class="text-xl font-bold text-center text-emerald-400 mt-1">--:--:--</div>
+            </div>
+
+            <!-- 3. Đồng hồ Giờ Toàn cầu (UTC/Google Time) -->
+            <div class="clock-container bg-gray-700 rounded-lg border-b-4 border-amber-500 p-4">
+                <p class="text-sm font-medium text-amber-400 mb-2 text-center">Giờ Toàn Cầu (UTC)</p>
+                <div class="aspect-ratio-wrapper">
+                    <canvas id="clock-utc" class="clock-canvas" width="250" height="250"></canvas>
+                </div>
+                <div id="utc-date" class="text-xs text-gray-300 mt-2 text-center"></div>
+                <div id="utc-digital-time" class="text-xl font-bold text-center text-amber-400 mt-1">--:--:--</div>
+            </div>
+
+        </div>
+        
+        <p class="text-center text-xs text-gray-500 mt-8">Đồng bộ giờ được thực hiện định kỳ 2 giây bằng API WorldTimeAPI, sử dụng công thức bù trừ ping/2.</p>
+
+    </div>
+
+    <script>
+        // Danh sách các múi giờ chính
+        const timezones = [
+            { label: 'Việt Nam (Hà Nội)', value: 'Asia/Ho_Chi_Minh' },
+            { label: 'Hoa Kỳ (New York)', value: 'America/New_York' },
+            { label: 'Hoa Kỳ (Los Angeles)', value: 'America/Los_Angeles' },
+            { label: 'Vương quốc Anh (London)', value: 'Europe/London' },
+            { label: 'Pháp (Paris)', value: 'Europe/Paris' },
+            { label: 'Đức (Berlin)', value: 'Europe/Berlin' },
+            { label: 'Nga (Moscow)', value: 'Europe/Moscow' },
+            { label: 'Nhật Bản (Tokyo)', value: 'Asia/Tokyo' },
+            { label: 'Hàn Quốc (Seoul)', value: 'Asia/Seoul' },
+            { label: 'Trung Quốc (Thượng Hải)', value: 'Asia/Shanghai' },
+            { label: 'Ấn Độ (Kolkata)', 'value': 'Asia/Kolkata' },
+            { label: 'Singapore', value: 'Asia/Singapore' },
+            { label: 'Úc (Sydney)', value: 'Australia/Sydney' },
+            { label: 'Brazil (Sao Paulo)', value: 'America/Sao_Paulo' },
+            { label: 'Canada (Toronto)', value: 'America/Toronto' },
+            { label: 'Dubai (UAE)', value: 'Asia/Dubai' },
+            { label: 'Mexico (Mexico City)', value: 'America/Mexico_City' },
+            { label: 'Nam Phi (Johannesburg)', value: 'Africa/Johannesburg' },
+            { label: 'Ai Cập (Cairo)', value: 'Africa/Cairo' },
+            { label: 'New Zealand (Auckland)', value: 'Pacific/Auckland' }
+        ];
+
+        // Hằng số cho Interval
+        const SYNC_INTERVAL_MS = 2000; // Khoảng thời gian nghỉ giữa các lần đồng bộ (2 giây)
+        const UPDATE_INTERVAL_MS = 50;  // Cập nhật Canvas 20 lần/giây (để mượt)
+
+        // Lấy các phần tử DOM
+        const selector = document.getElementById('timezone-selector');
+        const selectedDateDisplay = document.getElementById('selected-date');
+        const localDateDisplay = document.getElementById('local-date');
+        const utcDateDisplay = document.getElementById('utc-date');
+        
+        const selectedDigitalTimeDisplay = document.getElementById('selected-digital-time');
+        const localDigitalTimeDisplay = document.getElementById('local-digital-time');
+        const utcDigitalTimeDisplay = document.getElementById('utc-digital-time');
+
+        // Các phần tử cho Latency & Status
+        const latencyDisplay = document.getElementById('latency-display');
+        const lastPingTimeDisplay = document.getElementById('last-ping-time');
+        const apiStatusDisplay = document.getElementById('api-status');
+        
+        // Canvas elements and contexts
+        const selectedCanvas = document.getElementById('clock-selected');
+        const localCanvas = document.getElementById('clock-local');
+        const utcCanvas = document.getElementById('clock-utc');
+        
+        const selectedCtx = selectedCanvas.getContext('2d');
+        const localCtx = localCanvas.getContext('2d');
+        const utcCtx = utcCanvas.getContext('2d');
+
+        // Endpoint và Trạng thái
+        const TIME_API_URL = "https://worldtimeapi.org/api/ip"; 
+        let selectedTimezone = timezones[0].value; 
+        let timeOffset = 0; // Chênh lệch giữa Giờ Server đã bù trừ và Giờ Local
+
+        // Interval IDs
+        let updateIntervalId;
+
+
+        /**
+         * Chuyển đổi đối tượng Date thành chuỗi thời gian có miligiây theo múi giờ
+         */
+        function formatTimeWithMs(date, timeZone) {
+            const formatter = new Intl.DateTimeFormat('en-US', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                fractionalSecondDigits: 3, hour12: false, timeZone: timeZone 
+            });
+            return formatter.format(date);
+        }
+
+        /**
+         * Phân tích chuỗi thời gian thành các thành phần H, M, S, MS
+         */
+        function parseTimeWithMs(formattedTime) {
+            const parts = formattedTime.match(/(\d{2}):(\d{2}):(\d{2})\.(\d{3})/);
+            if (parts) {
+                return {
+                    h: parseInt(parts[1], 10) % 24,
+                    m: parseInt(parts[2], 10),
+                    s: parseInt(parts[3], 10),
+                    ms: parseInt(parts[4], 10),
+                };
+            }
+            const fallbackParts = formattedTime.match(/(\d{2}):(\d{2}):(\d{2})/);
+            if (fallbackParts) {
+                 return {
+                    h: parseInt(fallbackParts[1], 10) % 24,
+                    m: parseInt(fallbackParts[2], 10),
+                    s: parseInt(fallbackParts[3], 10),
+                    ms: 0,
+                };
+            }
+            return { h: 0, m: 0, s: 0, ms: 0 };
+        }
+        
+        /**
+         * Hàm khởi tạo combobox với danh sách múi giờ
+         */
+        function initializeSelector() {
+            timezones.forEach(tz => {
+                const option = document.createElement('option');
+                option.value = tz.value;
+                option.textContent = tz.label;
+                selector.appendChild(option);
+            });
+
+            selector.addEventListener('change', (event) => {
+                selectedTimezone = event.target.value;
+                updateTime(); 
+            });
+        }
+
+        /**
+         * Hàm vẽ đồng hồ kim trên Canvas
+         */
+        function drawClock(ctx, h, m, s, ms) {
+            const canvas = ctx.canvas;
+            const radius = 125; 
+            const center = 125; 
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.translate(center, center); 
+            
+            // 1. Vẽ mặt đồng hồ
+            ctx.beginPath();
+            ctx.arc(0, 0, radius - 5, 0, 2 * Math.PI);
+            ctx.fillStyle = '#1f2937'; 
+            ctx.fill();
+            ctx.lineWidth = 6;
+            ctx.strokeStyle = '#334155'; 
+            ctx.stroke();
+
+            // 2. Vẽ điểm đánh dấu giờ (Ticks)
+            for(let i = 0; i < 60; i++) {
+                const isHour = i % 5 === 0;
+                const len = isHour ? 12 : 6; 
+                const width = isHour ? 4 : 2; 
+                
+                ctx.save();
+                ctx.rotate(i * Math.PI / 30); 
+                ctx.strokeStyle = isHour ? '#cbd5e1' : '#475569'; 
+                ctx.lineWidth = width;
+                ctx.beginPath();
+                ctx.moveTo(0, -radius + 6);
+                ctx.lineTo(0, -radius + 6 + len);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // 3. Vẽ chữ số giờ (1, 2, 3, ... 12)
+            ctx.font = 'bold 16px Inter, sans-serif';
+            ctx.fillStyle = '#cbd5e1';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const textRadius = radius * 0.8; 
+            
+            for(let i = 1; i <= 12; i++) {
+                const angle = (i * (Math.PI / 6)) - (Math.PI / 2); 
+                const x = textRadius * Math.cos(angle);
+                const y = textRadius * Math.sin(angle) + 2; 
+                ctx.fillText(i.toString(), x, y);
+            }
+
+            // 4. Tính góc quay TRƠN TRU (dựa trên mili-giây)
+            const totalSeconds = s + ms / 1000;
+            const totalMinutes = m + totalSeconds / 60;
+            const totalHours = (h % 12) + totalMinutes / 60; 
+
+            // Angles
+            const hrAngle = totalHours * (Math.PI / 6) - (Math.PI / 2); 
+            const minAngle = totalMinutes * (Math.PI / 30) - (Math.PI / 2);
+            const secAngle = totalSeconds * (Math.PI / 30) - (Math.PI / 2);
+
+            // 5. Vẽ kim giây
+            drawHand(ctx, secAngle, radius * 0.9, 2, '#ef4444'); 
+            
+            // 6. Vẽ kim phút
+            drawHand(ctx, minAngle, radius * 0.7, 4, '#94a3b8'); 
+            
+            // 7. Vẽ kim giờ
+            drawHand(ctx, hrAngle, radius * 0.5, 6, '#cbd5e1'); 
+
+            // 8. Vẽ chấm trung tâm
+            ctx.beginPath();
+            ctx.arc(0, 0, 6, 0, 2 * Math.PI); 
+            ctx.fillStyle = '#fuchsia-500';
+            ctx.fill();
+
+            ctx.translate(-center, -center); 
+        }
+
+        /**
+         * Hàm phụ để vẽ một kim đồng hồ
+         */
+        function drawHand(ctx, angle, length, width, color) {
+            ctx.beginPath();
+            ctx.lineWidth = width;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = color;
+            ctx.moveTo(0, 0);
+            ctx.lineTo(length * Math.cos(angle), length * Math.sin(angle));
+            ctx.stroke();
+        }
+
+
+        /**
+         * Hàm cập nhật thời gian cho cả 3 đồng hồ
+         */
+        function updateTime() {
+            const now = new Date();
+
+            // Lấy Timestamp chính xác (Local + offset) - Đây là Timestamp mượt
+            const accurateTimestamp = Date.now() + timeOffset;
+            const accurateDate = new Date(accurateTimestamp);
+
+            // Cấu hình định dạng tiếng Việt và NGÀY
+            const options = { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+            };
+            
+            // Cấu hình định dạng THỜI GIAN số (HH:MM:SS)
+            const timeOptions = { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit', 
+                hour12: false 
+            };
+
+            // --- 1. Giờ Múi giờ Đã chọn (Dùng API Time) ---
+            const formattedTimeSelected = formatTimeWithMs(accurateDate, selectedTimezone); 
+            const selectedComponents = parseTimeWithMs(formattedTimeSelected);
+            
+            drawClock(selectedCtx, selectedComponents.h, selectedComponents.m, selectedComponents.s, selectedComponents.ms);
+            selectedDateDisplay.textContent = accurateDate.toLocaleDateString('vi-VN', { ...options, timeZone: selectedTimezone });
+            selectedDigitalTimeDisplay.textContent = accurateDate.toLocaleTimeString('vi-VN', { ...timeOptions, timeZone: selectedTimezone });
+            
+            
+            // --- 2. Giờ Hệ Thống (Local Time) ---
+            const localComponents = { h: now.getHours(), m: now.getMinutes(), s: now.getSeconds(), ms: now.getMilliseconds() };
+            drawClock(localCtx, localComponents.h, localComponents.m, localComponents.s, localComponents.ms);
+            localDateDisplay.textContent = now.toLocaleDateString('vi-VN', options);
+            localDigitalTimeDisplay.textContent = now.toLocaleTimeString('vi-VN', timeOptions);
+
+            // --- 3. Đồng hồ Giờ Toàn Cầu (UTC Time) ---
+            const utcComponents = { 
+                h: accurateDate.getUTCHours(), 
+                m: accurateDate.getUTCMinutes(), 
+                s: accurateDate.getUTCSeconds(), 
+                ms: accurateDate.getUTCMilliseconds() 
+            };
+            drawClock(utcCtx, utcComponents.h, utcComponents.m, utcComponents.s, utcComponents.ms);
+            utcDateDisplay.textContent = accurateDate.toLocaleDateString('en-US', { ...options, timeZone: 'UTC' }) + ' (UTC)';
+            utcDigitalTimeDisplay.textContent = accurateDate.toLocaleTimeString('en-US', { ...timeOptions, timeZone: 'UTC' }) + ' UTC';
+        }
+
+        /**
+         * Hàm phụ hiển thị độ trễ mạng (latency)
+         */
+        function displayLatency(latency) {
+            latencyDisplay.textContent = `${latency} ms`;
+            
+            if (latency < 300) {
+                latencyDisplay.className = 'text-green-400 font-bold';
+            } else if (latency < 800) {
+                latencyDisplay.className = 'text-yellow-400 font-bold';
+            } else {
+                latencyDisplay.className = 'text-red-400 font-bold';
+            }
+            
+            const now = new Date();
+            lastPingTimeDisplay.textContent = `Cập nhật lúc: ${now.toLocaleTimeString('vi-VN', { hour12: false })}`;
+        }
+
+
+        /**
+         * Hàm gọi API để lấy giờ chính xác (sử dụng setTimeout để lặp lại)
+         */
+        async function syncTimeFromAPI() {
+            
+            apiStatusDisplay.textContent = `Đang đồng bộ định kỳ...`;
+            apiStatusDisplay.classList.remove('text-green-400', 'text-red-400');
+            apiStatusDisplay.classList.add('text-yellow-400');
+
+            const startTime = Date.now(); // T1: Client gửi
+
+            try {
+                // Thêm timestamp vào URL để đảm bảo không bị cache. Timeout là 5s.
+                const response = await fetch(`${TIME_API_URL}?t=${Date.now()}`, { cache: 'no-store', signal: AbortSignal.timeout(5000) }); 
+                
+                const localTimestampAtReceive = Date.now(); // T4: Client nhận
+                
+                if (!response.ok) {
+                    throw new Error(`Lỗi HTTP ${response.status} (${response.statusText})`);
+                }
+                
+                const data = await response.json();
+                
+                // 1. Tính độ trễ RTT (Ping)
+                const latency = localTimestampAtReceive - startTime; // T4 - T1
+                
+                // 2. Lấy Giờ Server từ phản hồi
+                const apiTimestamp = data.unixtime * 1000; // T3: Server gửi
+                
+                // 3. Áp dụng thuật toán bù trừ Ping/2:
+                // Server Time ước tính khi gói tin đến Client: T3 + (RTT/2)
+                const estimatedServerTime = apiTimestamp + (latency / 2); 
+                
+                // 4. Tính độ lệch (Offset)
+                // Offset = (Server Time ước tính) - (Local Time tại T4)
+                timeOffset = estimatedServerTime - localTimestampAtReceive; 
+                
+                // Cập nhật hiển thị Ping và Trạng thái
+                displayLatency(latency);
+                
+                const offsetSeconds = (timeOffset / 1000).toFixed(3); // Hiển thị 3 số thập phân
+                apiStatusDisplay.textContent = `ĐỒNG BỘ THÀNH CÔNG! Độ lệch: ${offsetSeconds} giây.`;
+                apiStatusDisplay.classList.remove('text-red-400', 'text-yellow-400');
+                apiStatusDisplay.classList.add('text-green-400');
+                
+            } catch (error) {
+                console.error(`Lỗi khi đồng bộ:`, error);
+                
+                let userFriendlyError;
+                const lowerCaseMessage = String(error.message).toLowerCase();
+
+                // Kiểm tra các lỗi mạng/timeout cấp thấp và cung cấp thông báo rõ ràng
+                if (lowerCaseMessage.includes("failed to fetch") || lowerCaseMessage.includes("networkerror")) {
+                    userFriendlyError = "Lỗi MẠNG: Không thể kết nối đến máy chủ API. (Kiểm tra kết nối Internet)";
+                } else if (lowerCaseMessage.includes("timeout")) {
+                    userFriendlyError = "Lỗi HẾT GIỜ: Máy chủ API phản hồi quá chậm (quá 5s).";
+                } else {
+                    userFriendlyError = `Lỗi API/HTTP không xác định: ${error.message}.`;
+                }
+
+                // Cập nhật Trạng thái lỗi VỚI CHI TIẾT
+                apiStatusDisplay.textContent = `LỖI ĐỒNG BỘ: ${userFriendlyError}. Sẽ thử lại sau 2.0s.`;
+                apiStatusDisplay.classList.remove('text-green-400', 'text-yellow-400');
+                apiStatusDisplay.classList.add('text-red-400');
+            } finally {
+                // SỬ DỤNG setTimeout để LẶP LẠI (đảm bảo độ chính xác của khoảng nghỉ 2s)
+                setTimeout(syncTimeFromAPI, SYNC_INTERVAL_MS);
+            }
+        }
+        
+        // Khởi động
+        window.onload = function () {
+            // 1. Khởi tạo hộp chọn
+            initializeSelector();
+
+            // 2. Khởi động đồng bộ API lần đầu và bắt đầu chuỗi setTimeout lặp lại
+            syncTimeFromAPI(); 
+
+            // 3. Khởi động đồng hồ (cập nhật 20 lần/giây cho chuyển động mượt)
+            updateTime();
+            updateIntervalId = setInterval(updateTime, UPDATE_INTERVAL_MS); 
+            
+            // Đảm bảo hiển thị latency về trạng thái chờ ban đầu
+            latencyDisplay.textContent = '...';
+            latencyDisplay.className = 'text-gray-300 font-bold';
+        }
+    </script>
+</body>
+</html>
+
